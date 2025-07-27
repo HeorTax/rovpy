@@ -1,155 +1,151 @@
 #!/usr/bin/env python3
 """
-Jetson Nano ve Pixhawk ile 6 motorlu su altı aracı motor test kodu
+Jetson Nano + Pixhawk (ArduSub) ile 6 motorlu su altı aracı motor test kodu
+Motorlarınızın bağlantı sırasına göre düzenlemeyi unutmayın!
 """
 
 import time
 from pymavlink import mavutil
 
-class UnderwaterVehicleMotorTest:
+class ArduSub6MotorTest:
+    # Motor kanal eşlemesi (ArduSub'da ayarladığınıza göre değiştirin)
+    MOTOR_MAPPING = {
+        1: 0,  # Motor 1 -> Kanal 1 (Throttle)
+        2: 1,  # Motor 2 -> Kanal 2 (Roll)
+        3: 2,  # Motor 3 -> Kanal 3 (Pitch)
+        4: 3,  # Motor 4 -> Kanal 4 (Yaw)
+        5: 4,  # Motor 5 -> Kanal 5 (Forward)
+        6: 5   # Motor 6 -> Kanal 6 (Lateral)
+    }
+
     def __init__(self, connection_string='/dev/ttyACM0', baudrate=115200):
-        """
-        Pixhawk bağlantısını başlat
-        :param connection_string: Pixhawk bağlantı noktası (örn. /dev/ttyACM0, /dev/ttyUSB0)
-        :param baudrate: Seri bağlantı baud hızı
-        """
-        print(f"Pixhawk'a bağlanılıyor: {connection_string} @ {baudrate} baud")
+        print(f"ArduSub'a bağlanılıyor: {connection_string} @ {baudrate} baud")
         self.master = mavutil.mavlink_connection(connection_string, baud=baudrate)
-        
-        # Heartbeat göndererek bağlantıyı bekleyelim
         self.master.wait_heartbeat()
-        print("Pixhawk ile bağlantı kuruldu!")
-        
-        # Motor sayısı
-        self.motor_count = 6
-        
-        # Motor minimum ve maksimum PWM değerleri
-        self.PWM_MIN = 1100  # Mikro saniye
-        self.PWM_MAX = 1900  # Mikro saniye
-        self.PWM_NEUTRAL = 1500  # Mikro saniye
+        print("Bağlantı kuruldu!")
+
+        # PWM sınırları (kendi motorlarınıza göre ayarlayın)
+        self.PWM_MIN = 1100
+        self.PWM_NEUTRAL = 1500
+        self.PWM_MAX = 1900
+
+        # Manuel moda geç (motor kontrolü için zorunlu)
+        self.set_mode('MANUAL')
+
+    def set_mode(self, mode):
+        """ArduSub modunu değiştir"""
+        mode_id = mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+        self.master.mav.set_mode_send(
+            self.master.target_system,
+            mode_id,
+            self._get_mode_number(mode))
+        print(f"{mode} moduna geçildi")
+
+    def _get_mode_number(self, mode_name):
+        """Mod ismini numaraya çevir"""
+        modes = {
+            'MANUAL': 0,
+            'STABILIZE': 1,
+            'ALT_HOLD': 2,
+            'AUTO': 3,
+            'ACRO': 4,
+            'POSHOLD': 5
+        }
+        return modes.get(mode_name.upper(), 0)
 
     def set_motor_pwm(self, motor_id, pwm_value):
-        """
-        Belirli bir motora PWM değeri gönder
-        :param motor_id: Motor ID'si (1-6)
-        :param pwm_value: PWM değeri (1100-1900)
-        """
-        if motor_id < 1 or motor_id > self.motor_count:
-            print(f"Hatalı motor ID: {motor_id}. 1-{self.motor_count} aralığında olmalı.")
+        """Tek bir motora PWM değeri gönder"""
+        if motor_id not in self.MOTOR_MAPPING:
+            print(f"Hatalı motor ID: {motor_id}")
             return
-        
-        # PWM değerini sınırla
+
         pwm_value = max(self.PWM_MIN, min(pwm_value, self.PWM_MAX))
-        
-        # MAV_CMD_DO_MOTOR_TEST komutunu gönder
-        # Parametreler: instance (motor numarası, 0'dan başlar), throttle (PWM), duration (ms), motor count, test order
-        self.master.mav.command_long_send(
-            self.master.target_system, self.master.target_component,
-            mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST,
-            0,  # confirmation
-            motor_id - 1,  # motor numarası (0'dan başlar)
-            pwm_value,  # PWM değeri
-            0,  # süre (0=sonsuz)
-            1,  # motor sayısı
-            0,  # test türü (0=motor testi)
-            0   # test sırası
-        )
-        
-        print(f"Motor {motor_id} PWM: {pwm_value}")
+        channel = self.MOTOR_MAPPING[motor_id]
 
-    def all_motors_stop(self):
-        """Tüm motorları durdur (nötr PWM gönder)"""
-        for motor_id in range(1, self.motor_count + 1):
-            self.set_motor_pwm(motor_id, self.PWM_NEUTRAL)
-        print("Tüm motorlar durduruldu (nötr PWM)")
+        # 16 kanallı override mesajı (6 motor için ilk 6 kanal)
+        channels = [65535] * 16  # 65535 = ignore
+        channels[channel] = pwm_value
 
-    def test_individual_motors(self, test_duration=3):
-        """
-        Her motoru tek tek test et
-        :param test_duration: Her motorun çalışma süresi (saniye)
-        """
-        print("\nBireysel motor testi başlıyor...")
-        
-        for motor_id in range(1, self.motor_count + 1):
-            print(f"\nMotor {motor_id} test ediliyor...")
-            
-            # Motoru yavaşça çalıştır
-            for pwm in range(self.PWM_NEUTRAL, self.PWM_NEUTRAL + 200, 50):
+        self.master.mav.rc_channels_override_send(
+            self.master.target_system,
+            self.master.target_component,
+            *channels[:16])
+
+        print(f"Motor {motor_id} (Kanal {channel+1}) -> PWM: {pwm_value}")
+
+    def test_sequence(self):
+        """6 motor için test senaryosu"""
+        try:
+            print("\n=== Tüm motorlar nötr konumda ===")
+            self._all_motors(self.PWM_NEUTRAL)
+            time.sleep(2)
+
+            print("\n=== Tekli motor testi ===")
+            for motor_id in range(1, 7):
+                print(f"\nMotor {motor_id} testi:")
+                self._ramp_motor(motor_id)
+                time.sleep(1)
+
+            print("\n=== Tüm motorlar senkron testi ===")
+            self._ramp_all_motors()
+
+            print("\n=== Test tamamlandı ===")
+            self._all_motors(self.PWM_NEUTRAL)
+
+        except KeyboardInterrupt:
+            print("\nTest durduruldu!")
+            self._all_motors(self.PWM_NEUTRAL)
+
+    def _ramp_motor(self, motor_id, duration=3):
+        """Motoru kademeli olarak çalıştır/durdur"""
+        steps = [1100, 1300, 1500, 1700, 1900, 1700, 1500, 1300, 1100]
+        for pwm in steps:
+            self.set_motor_pwm(motor_id, pwm)
+            time.sleep(duration/len(steps))
+
+    def _ramp_all_motors(self, duration=5):
+        """Tüm motorları senkronize test et"""
+        steps = [1500, 1600, 1700, 1800, 1900, 1800, 1700, 1600, 1500]
+        for pwm in steps:
+            for motor_id in range(1, 7):
                 self.set_motor_pwm(motor_id, pwm)
-                time.sleep(0.5)
-            
-            # Tam güç
-            self.set_motor_pwm(motor_id, self.PWM_MAX)
-            time.sleep(test_duration)
-            
-            # Motoru durdur
-            self.set_motor_pwm(motor_id, self.PWM_NEUTRAL)
-            time.sleep(1)
-        
-        print("\nBireysel motor testi tamamlandı!")
+            time.sleep(duration/len(steps))
 
-    def test_all_motors_together(self, test_duration=5):
-        """
-        Tüm motorları birlikte test et
-        :param test_duration: Test süresi (saniye)
-        """
-        print("\nTüm motorlar birlikte test ediliyor...")
-        
-        # Yavaşça hızlandır
-        for pwm in range(self.PWM_NEUTRAL, self.PWM_NEUTRAL + 300, 50):
-            for motor_id in range(1, self.motor_count + 1):
-                self.set_motor_pwm(motor_id, pwm)
-            time.sleep(1)
-        
-        # Tam güç
-        for motor_id in range(1, self.motor_count + 1):
-            self.set_motor_pwm(motor_id, self.PWM_MAX)
-        time.sleep(test_duration)
-        
-        # Yavaşça durdur
-        for pwm in range(self.PWM_MAX, self.PWM_NEUTRAL - 1, -50):
-            for motor_id in range(1, self.motor_count + 1):
-                self.set_motor_pwm(motor_id, pwm)
-            time.sleep(0.5)
-        
-        print("\nTüm motorlar testi tamamlandı!")
-
-    def run_comprehensive_test(self):
-        """Kapsamlı motor testi yürüt"""
-        print("\nKapsamlı motor testi başlıyor...")
-        
-        # 1. Adım: Tüm motorları durdur
-        self.all_motors_stop()
-        time.sleep(2)
-        
-        # 2. Adım: Motorları tek tek test et
-        self.test_individual_motors()
-        time.sleep(2)
-        
-        # 3. Adım: Tüm motorları birlikte test et
-        self.test_all_motors_together()
-        time.sleep(2)
-        
-        # 4. Adım: Testi sonlandır
-        self.all_motors_stop()
-        print("\nKapsamlı motor testi tamamlandı!")
+    def _all_motors(self, pwm_value):
+        """Tüm motorlara aynı PWM değerini gönder"""
+        for motor_id in range(1, 7):
+            self.set_motor_pwm(motor_id, pwm_value)
 
 if __name__ == "__main__":
-    # Bağlantı ayarlarını buradan değiştirebilirsiniz
-    # Örnek: '/dev/ttyUSB0' veya 'udp:127.0.0.1:14550' (SITL için)
-    uv_test = UnderwaterVehicleMotorTest(connection_string='/dev/ttyACM0', baudrate=115200)
+    # Bağlantı ayarlarınızı düzenleyin
+    tester = ArduSub6MotorTest(connection_string='/dev/ttyACM0', baudrate=115200)
+    
+    print("""
+    6 Motorlu Su Altı Aracı Test Programı
+    ------------------------------------
+    1) Tek motor testi
+    2) Tüm motorlar senkron testi
+    3) Tam test senaryosu
+    4) Tüm motorları durdur
+    """)
     
     try:
-        # Kapsamlı testi çalıştır
-        uv_test.run_comprehensive_test()
-        
-        # Veya tek tek test fonksiyonlarını çağırabilirsiniz:
-        # uv_test.test_individual_motors()
-        # uv_test.test_all_motors_together()
-        
+        while True:
+            choice = input("Seçiminiz (1-4, Çıkmak için q): ")
+            
+            if choice == '1':
+                motor_id = int(input("Motor ID (1-6): "))
+                tester._ramp_motor(motor_id)
+            elif choice == '2':
+                tester._ramp_all_motors()
+            elif choice == '3':
+                tester.test_sequence()
+            elif choice == '4':
+                tester._all_motors(tester.PWM_NEUTRAL)
+            elif choice.lower() == 'q':
+                break
+                
     except KeyboardInterrupt:
-        print("\nKullanıcı tarafından durduruldu!")
-        uv_test.all_motors_stop()
-    except Exception as e:
-        print(f"\nHata oluştu: {str(e)}")
-        uv_test.all_motors_stop()
+        print("\nProgram sonlandırıldı")
+    finally:
+        tester._all_motors(tester.PWM_NEUTRAL)
