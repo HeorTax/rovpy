@@ -1,154 +1,135 @@
 #!/usr/bin/env python3
+# -- coding: utf-8 --
+"""
+Basit 6 Motorlu Su Altı Aracı Test Sistemi
+Her motoru sırayla 5 saniye çalıştırır
+"""
+
 import time
 from pymavlink import mavutil
 
-class MAVLinkROVControl:
-    def __init__(self, connection_string='/dev/ttyACM0', baudrate=115200):
-        print("MAVLink bağlantısı kuruluyor...")
+class SimpleMotorTester:
+    def _init_(self, connection_string='tcp:127.0.0.1:5760'):
+        """
+        Motor test sistemi
+        """
+        print("Araca bağlanılıyor...")
+        self.master = mavutil.mavlink_connection(connection_string)
         
-        # MAVLink bağlantısını oluştur
-        try:
-            self.connection = mavutil.mavlink_connection(connection_string, baud=baudrate)
-            print(f"{connection_string} üzerinden bağlantı kuruldu (Baudrate: {baudrate})")
-            
-            # Heartbeat mesajı gönder
-            self.connection.wait_heartbeat()
-            print("Heartbeat alındı, bağlantı başarılı!")
-            
-            # ROV'nin sistem ID'sini al
-            self.target_system = self.connection.target_system
-            self.target_component = self.connection.target_component
-            print(f"Sistem ID: {self.target_system}, Komponent ID: {self.target_component}")
-            
-        except Exception as e:
-            print(f"MAVLink bağlantı hatası: {str(e)}")
-            self.connection = None
+        # Heartbeat bekle
+        self.master.wait_heartbeat()
+        print(f"Bağlandı! System ID: {self.master.target_system}")
+        
+        # Motor isimleri
+        self.motor_names = {
+            1: "Sol Ön Motor",
+            2: "Sağ Ön Motor", 
+            3: "Sol Arka Motor",
+            4: "Sağ Arka Motor",
+            5: "Sol Dikey Motor",
+            6: "Sağ Dikey Motor"
+        }
+        
+        # PWM değerleri
+        self.pwm_stop = 1500      # Dur
+        self.pwm_test = 1600      # Test hızı
 
-    def set_motor_speeds(self, speeds):
+    def send_motor_pwm(self, motor_channel, pwm_value):
         """
-        6 motorun hızlarını ayarlar (normalize edilmiş değerler: -1.0 ile 1.0 arası)
-        speeds = [motor1, motor2, motor3, motor4, motor5, motor6]
+        Motora PWM gönder (1-6 arası motor kanalı)
         """
-        if not self.connection:
-            print("Bağlantı yok, motorlar kontrol edilemiyor")
-            return False
-
-        try:
-            # Motor çıkışlarını ayarla (MAV_CMD_DO_MOTOR_TEST)
-            # https://mavlink.io/en/messages/common.html#MAV_CMD_DO_MOTOR_TEST
+        # 18 kanallı RC override mesajı
+        rc_channels = [65535] * 18  # 65535 = değiştirme
+        
+        if 1 <= motor_channel <= 6:
+            rc_channels[motor_channel - 1] = pwm_value
             
-            # Önce tüm motorları durdur
-            self.connection.mav.command_long_send(
-                self.target_system,
-                self.target_component,
-                mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST,
-                0,  # confirmation
-                0,  # motor instance (0 for all)
-                mavutil.mavlink.MOTOR_TEST_THROTTLE_PERCENT,
-                0,  # throttle percentage
-                0,  # timeout
-                0,  # motor count
-                0,  # test order
-                0   # empty
+            msg = self.master.mav.rc_channels_override_encode(
+                self.master.target_system,
+                self.master.target_component,
+                *rc_channels
             )
-            
-            # Her motoru ayrı ayrı ayarla
-            for i, speed in enumerate(speeds):
-                motor_id = i + 1  # MAVLink motor numaralandırması genelde 1'den başlar
-                
-                # Hız değerini -1000 ile 1000 arasına ölçeklendir
-                pwm_value = int(1000 + speed * 1000)  # 1000-2000 arası PWM
-                pwm_value = max(1000, min(2000, pwm_value))  # Sınırları koru
-                
-                self.connection.mav.command_long_send(
-                    self.target_system,
-                    self.target_component,
-                    mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST,
-                    0,  # confirmation
-                    motor_id,  # motor instance
-                    mavutil.mavlink.MOTOR_TEST_THROTTLE_PWM,
-                    pwm_value,  # throttle PWM
-                    1000,  # timeout (ms)
-                    1,  # motor count
-                    0,  # test order
-                    0   # empty
-                )
-            
-            return True
-            
-        except Exception as e:
-            print(f"Motor kontrol hatası: {str(e)}")
-            return False
+            self.master.mav.send(msg)
+
+    def stop_all_motors(self):
+        """
+        Tüm motorları durdur
+        """
+        print("Tüm motorlar durduruluyor...")
+        for motor in range(1, 7):
+            self.send_motor_pwm(motor, self.pwm_stop)
+        time.sleep(0.5)
 
     def test_motors(self):
-        if not self.connection:
-            print("Bağlantı yok, test yapılamaz")
-            return
-
-        print("\n6 Motorlu ROV MAVLink testi başlıyor...")
-        print("Her motor sırayla 2 saniye çalıştırılacak")
-        print("Çıkmak için CTRL+C tuşlarını kullanın\n")
-
-        try:
-            while True:
-                # Motor 1 (Sol ön)
-                print("Motor 1 (Sol ön) çalışıyor (ileri)")
-                self.set_motor_speeds([0.5, 0, 0, 0, 0, 0])
-                time.sleep(2)
-                
-                # Motor 2 (Sağ ön)
-                print("Motor 2 (Sağ ön) çalışıyor (ileri)")
-                self.set_motor_speeds([0, 0.5, 0, 0, 0, 0])
-                time.sleep(2)
-                
-                # Motor 3 (Sol orta)
-                print("Motor 3 (Sol orta) çalışıyor (ileri)")
-                self.set_motor_speeds([0, 0, 0.5, 0, 0, 0])
-                time.sleep(2)
-                
-                # Motor 4 (Sağ orta)
-                print("Motor 4 (Sağ orta) çalışıyor (ileri)")
-                self.set_motor_speeds([0, 0, 0, 0.5, 0, 0])
-                time.sleep(2)
-                
-                # Motor 5 (Sol arka)
-                print("Motor 5 (Sol arka) çalışıyor (geri)")
-                self.set_motor_speeds([0, 0, 0, 0, -0.5, 0])
-                time.sleep(2)
-                
-                # Motor 6 (Sağ arka)
-                print("Motor 6 (Sağ arka) çalışıyor (geri)")
-                self.set_motor_speeds([0, 0, 0, 0, 0, -0.5])
-                time.sleep(2)
-                
-                # Tüm motorlar birlikte ileri
-                print("Tüm motorlar ileri yönde çalışıyor")
-                self.set_motor_speeds([0.3, 0.3, 0.3, 0.3, 0.3, 0.3])
-                time.sleep(3)
-                
-                # Tüm motorlar birlikte geri
-                print("Tüm motorlar geri yönde çalışıyor")
-                self.set_motor_speeds([-0.3, -0.3, -0.3, -0.3, -0.3, -0.3])
-                time.sleep(3)
-                
-                # Dikey hareket testi
-                print("Dikey hareket testi")
-                self.set_motor_speeds([0.2, 0.2, -0.2, -0.2, 0, 0])
-                time.sleep(3)
-                
-                # Durdur
-                print("Tüm motorlar durduruluyor")
-                self.set_motor_speeds([0, 0, 0, 0, 0, 0])
+        """
+        Motorları sırayla test et
+        """
+        print("\n=== MOTOR TESTİ BAŞLIYOR ===")
+        
+        # Önce tüm motorları durdur
+        self.stop_all_motors()
+        
+        # Her motoru sırayla test et
+        for motor_num in range(1, 7):
+            motor_name = self.motor_names[motor_num]
+            
+            print(f"\n{motor_num}. Motor Testi: {motor_name}")
+            print("Çalıştırılıyor...")
+            
+            # Motoru çalıştır
+            self.send_motor_pwm(motor_num, self.pwm_test)
+            
+            # 5 saniye bekle
+            for i in range(5):
+                print(f"  {i+1}/5 saniye")
                 time.sleep(1)
-                
-        except KeyboardInterrupt:
-            print("\nTest sonlandırılıyor...")
-        finally:
-            self.set_motor_speeds([0, 0, 0, 0, 0, 0])
-            print("Tüm motorlar durduruldu")
+            
+            # Motoru durdur
+            self.send_motor_pwm(motor_num, self.pwm_stop)
+            print(f"{motor_name} durduruldu")
+            
+            # Sonraki motor için 2 saniye ara
+            if motor_num < 6:
+                print("Sonraki motor için bekleniyor...")
+                time.sleep(2)
+        
+        print("\n=== TÜM MOTORLAR TEST EDİLDİ ===")
 
-if __name__ == "__main__":
-    # Bağlantı ayarlarını cihazınıza göre değiştirin
-    # Örnekler: '/dev/ttyACM0', 'udp:127.0.0.1:14550', 'com3'
-    rov = MAVLinkROVControl(connection_string='/dev/ttyACM0', baudrate=115200)
-    rov.test_motors()
+    def cleanup(self):
+        """
+        Temizlik
+        """
+        self.stop_all_motors()
+        self.master.close()
+        print("Bağlantı kapatıldı")
+
+def main():
+    """
+    Ana fonksiyon
+    """
+    # Bağlantı ayarları
+    connection = 'tcp:127.0.0.1:5760'  # Simulatör için
+    # connection = 'udp:127.0.0.1:14550'  # UDP için
+    # connection = '/dev/ttyUSB0'  # Serial için
+    
+    try:
+        # Test sistemi oluştur
+        tester = SimpleMotorTester(connection)
+        
+        # Test başlat
+        input("Motor testini başlatmak için ENTER'a basın...")
+        tester.test_motors()
+        
+        # Temizlik
+        tester.cleanup()
+        
+    except KeyboardInterrupt:
+        print("\nTest kullanıcı tarafından durduruldu!")
+        tester.stop_all_motors()
+        tester.cleanup()
+        
+    except Exception as e:
+        print(f"Hata: {e}")
+
+if _name_ == "_main_":
+    main()
