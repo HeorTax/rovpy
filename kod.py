@@ -91,5 +91,5 @@ def kablo_takip():
     move_forward(2)
 
 # Program çalıştır
-if _name_ == '_main_':
+if __name__ == '__main__':
     kablo_takip()
