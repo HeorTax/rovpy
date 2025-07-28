@@ -1,15 +1,28 @@
 from pymavlink import mavutil
 import time
 
-# Pixhawk bağlantısı (örnek olarak USB üzerinden)
+# Pixhawk bağlantısı
 master = mavutil.mavlink_connection('/dev/ttyACM0', baud=115200)
-
-# ArduSub başlatmasını bekle
 master.wait_heartbeat()
 print("Bağlantı kuruldu. Sistem hazır.")
 
-# Uçuş modunu değiştirme fonksiyonu
-def set_mode(mode_str='STABILIZE'):  # Derinlik sabitleme yok, STABILIZE mod yeterli
+# ARM etme fonksiyonu
+def arm():
+    print("ARM ediliyor...")
+    master.mav.command_long_send(
+        master.target_system,
+        master.target_component,
+        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+        0, 1, 0, 0, 0, 0, 0, 0
+    )
+    while True:
+        msg = master.recv_match(type='HEARTBEAT', blocking=True)
+        if msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED:
+            print("Araç ARM edildi.")
+            break
+
+# Mod değiştirme
+def set_mode(mode_str='MANUAL'):
     modes = master.mode_mapping()
     if mode_str not in modes:
         print(f"{mode_str} modu bulunamadı. Mevcut modlar: {list(modes.keys())}")
@@ -21,85 +34,65 @@ def set_mode(mode_str='STABILIZE'):  # Derinlik sabitleme yok, STABILIZE mod yet
         mode_id
     )
     while True:
-        ack_msg = master.recv_match(type='HEARTBEAT', blocking=True)
-        if ack_msg.custom_mode == mode_id:
+        ack = master.recv_match(type='HEARTBEAT', blocking=True)
+        if ack.custom_mode == mode_id:
             print(f"{mode_str} moduna geçildi.")
             break
 
-# Aracı ileri hareket ettir
-def move_forward(duration=3, speed=0.5):
-    print(f"{duration} saniye boyunca ileri gidiliyor.")
-    master.mav.set_position_target_local_ned_send(
-        0,
+# PWM ile ileri hareket (RC override)
+def move_forward(duration=2):
+    print("İleri gidiliyor...")
+    master.mav.rc_channels_override_send(
         master.target_system,
         master.target_component,
-        mavutil.mavlink.MAV_FRAME_BODY_NED,
-        0b0000111111000111,  # velocity kontrolü
-        0, speed, 0,         # X ekseninde hız (ileri)
-        0, 0, 0,             # z=0 (derinlik yok)
-        0, 0, 0,
-        0, 0
+        1600, 1600, 1500, 1500, 1500, 1500, 0, 0  # İleri yön (kanal 1-2)
     )
     time.sleep(duration)
     stop()
 
-# Sağa dönme
-def yaw_right(yaw_rate=0.5, duration=2):
-    print(f"{duration} saniye boyunca sağa dönülüyor.")
-    master.mav.set_position_target_local_ned_send(
-        0,
+# Sağa dönme (örnek: kanal 4 - yaw)
+def yaw_right(duration=1):
+    print("Sağa dönülüyor...")
+    master.mav.rc_channels_override_send(
         master.target_system,
         master.target_component,
-        mavutil.mavlink.MAV_FRAME_BODY_NED,
-        0b0000011111000000,  # yaw kontrolü
-        0, 0, 0,
-        0, 0, 0,
-        0, 0, yaw_rate,
-        0, 0
+        1500, 1500, 1500, 1600, 1500, 1500, 0, 0
     )
     time.sleep(duration)
     stop()
 
 # Sola dönme
-def yaw_left(yaw_rate=0.5, duration=2):
-    print(f"{duration} saniye boyunca sola dönülüyor.")
-    yaw_right(-yaw_rate, duration)
+def yaw_left(duration=1):
+    print("Sola dönülüyor...")
+    master.mav.rc_channels_override_send(
+        master.target_system,
+        master.target_component,
+        1500, 1500, 1500, 1400, 1500, 1500, 0, 0
+    )
+    time.sleep(duration)
+    stop()
 
-# Durdurma
+# Motorları durdur
 def stop():
-    master.mav.set_position_target_local_ned_send(
-        0,
+    master.mav.rc_channels_override_send(
         master.target_system,
         master.target_component,
-        mavutil.mavlink.MAV_FRAME_BODY_NED,
-        0b0000111111000111,
-        0, 0, 0,
-        0, 0, 0,
-        0, 0, 0,
-        0, 0
+        1500, 1500, 1500, 1500, 1500, 1500, 0, 0
     )
-    print("Araç durdu.")
+    print("Durdu.")
 
-# Ana görev akışı
+# Ana görev
 def kablo_takip():
-    # ARM et
-    print("ARM ediliyor...")
-    master.mav.command_long_send(
-        master.target_system,
-        master.target_component,
-        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-        0, 1, 0, 0, 0, 0, 0, 0
-    )
-    time.sleep(2)
-    
-    set_mode('STABILIZE')  # Derinlik kontrolü yoksa STABILIZE önerilir
+    set_mode('MANUAL')   # ArduSub için güvenli bir başlangıç
+    arm()
     time.sleep(1)
     move_forward(3)
-    yaw_right(0.5, 1)
+    yaw_right(1)
     move_forward(2)
-    yaw_left(0.5, 1)
+    yaw_left(1)
     move_forward(2)
+    stop()
 
-# Program çalıştır
+# Çalıştır
 if __name__ == '__main__':
     kablo_takip()
