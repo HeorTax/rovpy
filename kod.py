@@ -82,6 +82,16 @@ def stop():
 
 # Ana görev akışı
 def kablo_takip():
+    # ARM et
+    print("ARM ediliyor...")
+    master.mav.command_long_send(
+        master.target_system,
+        master.target_component,
+        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+        0, 1, 0, 0, 0, 0, 0, 0
+    )
+    time.sleep(2)
+    
     set_mode('STABILIZE')  # Derinlik kontrolü yoksa STABILIZE önerilir
     time.sleep(1)
     move_forward(3)
