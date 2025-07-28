@@ -14,15 +14,12 @@ def set_mode(mode_str='STABILIZE'):  # Derinlik sabitleme yok, STABILIZE mod yet
     if mode_str not in modes:
         print(f"{mode_str} modu bulunamadı. Mevcut modlar: {list(modes.keys())}")
         return
-
     mode_id = modes[mode_str]
-
     master.mav.set_mode_send(
         master.target_system,
         mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
         mode_id
     )
-
     while True:
         ack_msg = master.recv_match(type='HEARTBEAT', blocking=True)
         if ack_msg.custom_mode == mode_id:
@@ -33,7 +30,7 @@ def set_mode(mode_str='STABILIZE'):  # Derinlik sabitleme yok, STABILIZE mod yet
 def move_forward(duration=3, speed=0.5):
     print(f"{duration} saniye boyunca ileri gidiliyor.")
     master.mav.set_position_target_local_ned_send(
-        int(round(time.time() * 1000)),
+        0,
         master.target_system,
         master.target_component,
         mavutil.mavlink.MAV_FRAME_BODY_NED,
@@ -50,7 +47,7 @@ def move_forward(duration=3, speed=0.5):
 def yaw_right(yaw_rate=0.5, duration=2):
     print(f"{duration} saniye boyunca sağa dönülüyor.")
     master.mav.set_position_target_local_ned_send(
-        int(round(time.time() * 1000)),
+        0,
         master.target_system,
         master.target_component,
         mavutil.mavlink.MAV_FRAME_BODY_NED,
@@ -71,7 +68,7 @@ def yaw_left(yaw_rate=0.5, duration=2):
 # Durdurma
 def stop():
     master.mav.set_position_target_local_ned_send(
-        int(round(time.time() * 1000)),
+        0,
         master.target_system,
         master.target_component,
         mavutil.mavlink.MAV_FRAME_BODY_NED,
@@ -87,7 +84,6 @@ def stop():
 def kablo_takip():
     set_mode('STABILIZE')  # Derinlik kontrolü yoksa STABILIZE önerilir
     time.sleep(1)
-
     move_forward(3)
     yaw_right(0.5, 1)
     move_forward(2)
